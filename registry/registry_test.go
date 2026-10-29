@@ -2,6 +2,8 @@ package registry
 
 import (
 	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -487,6 +489,29 @@ func TestDownloadVersioNoManifest(t *testing.T) {
 	_, _, err = DownloadVersion(opts)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "does not contain a manifest")
+}
+
+func TestReadTarballVersionDecompressionBomb(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	size := int64(maxApplicationSize + 1)
+	assert.NoError(t, tw.WriteHeader(&tar.Header{Name: "manifest.webapp", Size: size, Mode: 0644}))
+	_, err := io.CopyN(tw, zeroReader{}, size)
+	assert.NoError(t, err)
+	assert.NoError(t, tw.Close())
+	assert.NoError(t, gw.Close())
+
+	_, err = ReadTarballVersion(&buf, "application/gzip", "bomb.tar.gz")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "bigger than")
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }
 
 func TestIsValidVersion(t *testing.T) {

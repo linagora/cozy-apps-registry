@@ -855,6 +855,8 @@ func HandleAssets(tarball *Tarball, opts *VersionOptions) ([]*kivik.Attachment, 
 		return nil, err
 	}
 
+	// The assets are kept in memory, so they share a single budget
+	budget := &io.LimitedReader{R: tr, N: maxApplicationSize + 1}
 	for {
 		var hdr *tar.Header
 		hdr, err = tr.Next()
@@ -889,7 +891,7 @@ func HandleAssets(tarball *Tarball, opts *VersionOptions) ([]*kivik.Attachment, 
 			continue
 		}
 		var data []byte
-		data, err = io.ReadAll(tr)
+		data, err = readLimited(budget)
 		if err != nil {
 			return nil, err
 		}
@@ -905,6 +907,17 @@ func HandleAssets(tarball *Tarball, opts *VersionOptions) ([]*kivik.Attachment, 
 	}
 
 	return attachments, nil
+}
+
+// readLimited reads r until EOF and fails once its limit is exhausted: tar
+// entries are decompressed, so their size is not bounded by the tarball size.
+func readLimited(r *io.LimitedReader) ([]byte, error) {
+	data, err := io.ReadAll(r)
+	if err == nil && r.N <= 0 {
+		err = errshttp.NewError(http.StatusUnprocessableEntity,
+			"Application tarball content is bigger than %dMB", maxApplicationSizeInMB)
+	}
+	return data, err
 }
 
 func saveTarball(prefix base.Prefix, filepath string, tarball *Tarball) error {
@@ -991,7 +1004,7 @@ func ReadTarballVersion(reader io.Reader, contentType, url string) (*Tarball, er
 
 		if basename == "package.json" {
 			var packageContent []byte
-			packageContent, err = io.ReadAll(tr)
+			packageContent, err = readLimited(&io.LimitedReader{R: tr, N: maxApplicationSize + 1})
 			if err != nil {
 				err = errshttp.NewError(http.StatusUnprocessableEntity,
 					"Could not reach version on specified url %s: %s", url, err)
@@ -1029,7 +1042,7 @@ func ReadTarballVersion(reader io.Reader, contentType, url string) (*Tarball, er
 // ReadTarballManifest handles the tarball manifest. It checks if the manifest
 // exists, is valid JSON and tries to load it to the Manifest struct
 func ReadTarballManifest(tr io.Reader, url string) (*Manifest, []byte, map[string]interface{}, error) {
-	manifestContent, err := io.ReadAll(tr)
+	manifestContent, err := readLimited(&io.LimitedReader{R: tr, N: maxApplicationSize + 1})
 	if err != nil {
 		err = errshttp.NewError(http.StatusUnprocessableEntity,
 			"Could not reach version on specified url %s: %s", url, err)
