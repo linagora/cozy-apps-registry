@@ -335,6 +335,13 @@ func TestCreateVersionUpload(t *testing.T) {
 	assert.Equal(t, content, opts.Tarball)
 	assert.Equal(t, "tarball.tar.gz", opts.URL)
 
+	// The metadata comes from the body, not from the query string
+	query := url.Values{"metadata": {`{"version":"9.9.9"}`}}.Encode()
+	opts = &registry.VersionOptions{}
+	c = echo.New().NewContext(newUploadRequest(t, target+"?"+query, metadata, content), httptest.NewRecorder())
+	require.NoError(t, bindUpload(c, opts))
+	assert.Equal(t, "1.0.0", opts.Version)
+
 	// The metadata field keeps the 100K limit
 	req := newUploadRequest(t, target, strings.Repeat(" ", maxMetadataSize+1), nil)
 	err := bindUpload(echo.New().NewContext(req, httptest.NewRecorder()), &registry.VersionOptions{})

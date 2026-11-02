@@ -136,7 +136,8 @@ func bindUpload(c echo.Context, opts *registry.VersionOptions) error {
 		}
 		return errshttp.NewError(http.StatusBadRequest, "Invalid multipart body: %s", err)
 	}
-	metadata := req.FormValue("metadata")
+	// PostFormValue ignores the query string: the metadata comes from the body
+	metadata := req.PostFormValue("metadata")
 	// The body limit is skipped for this route, but metadata is no bigger here
 	// than in a regular request
 	if len(metadata) > maxMetadataSize {
