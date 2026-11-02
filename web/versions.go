@@ -32,6 +32,13 @@ func createVersion(c echo.Context) (err error) {
 		return err
 	}
 
+	// The body is read only once the editor is allowed to publish this app:
+	// an upload is much bigger than the global body limit
+	editor, err := checkPermissions(c, app.Editor, app.Slug, false /* = not master */)
+	if err != nil {
+		return errshttp.NewError(http.StatusUnauthorized, "%s", err)
+	}
+
 	opts := &registry.VersionOptions{}
 	if isMultipart(c) {
 		err = bindUpload(c, opts)
@@ -43,11 +50,6 @@ func createVersion(c echo.Context) (err error) {
 	}
 	opts.Version = stripVersion(opts.Version)
 	opts.SpacePrefix = prefix
-
-	editor, err := checkPermissions(c, app.Editor, app.Slug, false /* = not master */)
-	if err != nil {
-		return errshttp.NewError(http.StatusUnauthorized, "%s", err)
-	}
 
 	if err = validateVersionRequest(c, opts); err != nil {
 		return err
