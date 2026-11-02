@@ -306,23 +306,29 @@ func createApps() error {
 	return registry.DeactivateMaintenanceVirtualSpace(myKonnectorsSpace, quuxKonn)
 }
 
+// newUploadRequest builds a multipart request for createVersion, with the
+// metadata JSON and the tarball content
+func newUploadRequest(t *testing.T, target, metadata string, tarball []byte) *http.Request {
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	require.NoError(t, w.WriteField("metadata", metadata))
+	fw, err := w.CreateFormFile("tarball", "../../evil.tar.gz")
+	require.NoError(t, err)
+	_, err = fw.Write(tarball)
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	req := httptest.NewRequest(http.MethodPost, target, body)
+	req.Header.Set(echo.HeaderContentType, w.FormDataContentType())
+	return req
+}
+
 func TestCreateVersionUpload(t *testing.T) {
+	target := server.URL + "/registry/" + keptApp
+	metadata := `{"version":"1.0.0","sha256":"abc"}`
 	// Larger than the 100K body limit applied to the other requests
 	content := bytes.Repeat([]byte("x"), 200<<10)
-	newRequest := func() *http.Request {
-		body := &bytes.Buffer{}
-		w := multipart.NewWriter(body)
-		require.NoError(t, w.WriteField("metadata", `{"version":"1.0.0","sha256":"abc"}`))
-		fw, err := w.CreateFormFile("tarball", "../../evil.tar.gz")
-		require.NoError(t, err)
-		_, _ = fw.Write(content)
-		require.NoError(t, w.Close())
-		req := httptest.NewRequest(http.MethodPost, server.URL+"/registry/"+keptApp, body)
-		req.Header.Set(echo.HeaderContentType, w.FormDataContentType())
-		return req
-	}
 
-	c := echo.New().NewContext(newRequest(), httptest.NewRecorder())
+	c := echo.New().NewContext(newUploadRequest(t, target, metadata, content), httptest.NewRecorder())
 	opts := &registry.VersionOptions{}
 	require.NoError(t, bindUpload(c, opts))
 	assert.Equal(t, "1.0.0", opts.Version)
@@ -330,12 +336,7 @@ func TestCreateVersionUpload(t *testing.T) {
 	assert.Equal(t, "tarball.tar.gz", opts.URL)
 
 	// The metadata field keeps the 100K limit
-	body := &bytes.Buffer{}
-	w := multipart.NewWriter(body)
-	require.NoError(t, w.WriteField("metadata", strings.Repeat(" ", maxMetadataSize+1)))
-	require.NoError(t, w.Close())
-	req := httptest.NewRequest(http.MethodPost, server.URL+"/registry/"+keptApp, body)
-	req.Header.Set(echo.HeaderContentType, w.FormDataContentType())
+	req := newUploadRequest(t, target, strings.Repeat(" ", maxMetadataSize+1), nil)
 	err := bindUpload(echo.New().NewContext(req, httptest.NewRecorder()), &registry.VersionOptions{})
 	var httpErr *errshttp.Error
 	require.ErrorAs(t, err, &httpErr)
@@ -343,7 +344,7 @@ func TestCreateVersionUpload(t *testing.T) {
 
 	// The route accepts large multipart bodies: it fails on auth, not on
 	// Content-Type or body size
-	req = newRequest()
+	req = newUploadRequest(t, target, metadata, content)
 	req.RequestURI = ""
 	res, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -351,7 +352,7 @@ func TestCreateVersionUpload(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, res.StatusCode)
 
 	// JSON bodies keep the 100K limit
-	res2, err := http.Post(server.URL+"/registry/"+keptApp, echo.MIMEApplicationJSON, bytes.NewReader(content))
+	res2, err := http.Post(target, echo.MIMEApplicationJSON, bytes.NewReader(content))
 	require.NoError(t, err)
 	defer res2.Body.Close()
 	assert.Equal(t, http.StatusRequestEntityTooLarge, res2.StatusCode)
