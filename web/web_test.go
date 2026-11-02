@@ -342,6 +342,13 @@ func TestCreateVersionUpload(t *testing.T) {
 	require.ErrorAs(t, err, &httpErr)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, httpErr.StatusCode())
 
+	// A tarball over the limit is rejected as too large, not as invalid
+	req = newUploadRequest(t, target, metadata, make([]byte, registry.MaxApplicationSize+(2<<20)))
+	err = bindUpload(echo.New().NewContext(req, httptest.NewRecorder()), &registry.VersionOptions{})
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, httpErr.StatusCode())
+	assert.Contains(t, err.Error(), "bigger than")
+
 	// The route accepts large multipart bodies: it fails on auth, not on
 	// Content-Type or body size
 	req = newUploadRequest(t, target, metadata, content)
