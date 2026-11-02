@@ -17,6 +17,8 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const maxMetadataSize = 100 << 10
+
 func createVersion(c echo.Context) (err error) {
 	if err = checkAuthorized(c); err != nil {
 		return err
@@ -126,7 +128,13 @@ func bindUpload(c echo.Context, opts *registry.VersionOptions) error {
 	if err := req.ParseMultipartForm(32 << 20); err != nil {
 		return errshttp.NewError(http.StatusBadRequest, "Invalid multipart body: %s", err)
 	}
-	if err := json.Unmarshal([]byte(req.FormValue("metadata")), opts); err != nil {
+	metadata := req.FormValue("metadata")
+	// The body limit is skipped for this route, but metadata is no bigger here
+	// than in a regular request
+	if len(metadata) > maxMetadataSize {
+		return errshttp.NewError(http.StatusRequestEntityTooLarge, "Metadata field is too large")
+	}
+	if err := json.Unmarshal([]byte(metadata), opts); err != nil {
 		return errshttp.NewError(http.StatusBadRequest, "Invalid metadata field: %s", err)
 	}
 	fh, err := c.FormFile("tarball")

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/go-kivik/kivik/v3"
@@ -17,6 +18,7 @@ import (
 	"github.com/cozy/cozy-apps-registry/auth"
 	"github.com/cozy/cozy-apps-registry/base"
 	"github.com/cozy/cozy-apps-registry/config"
+	"github.com/cozy/cozy-apps-registry/errshttp"
 	"github.com/cozy/cozy-apps-registry/registry"
 	"github.com/cozy/cozy-apps-registry/space"
 	"github.com/labstack/echo/v4"
@@ -326,9 +328,21 @@ func TestCreateVersionUpload(t *testing.T) {
 	assert.Equal(t, content, opts.Tarball)
 	assert.Equal(t, "tarball.tar.gz", opts.URL)
 
+	// The metadata field keeps the 100K limit
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	require.NoError(t, w.WriteField("metadata", strings.Repeat(" ", maxMetadataSize+1)))
+	require.NoError(t, w.Close())
+	req := httptest.NewRequest(http.MethodPost, server.URL+"/registry/"+keptApp, body)
+	req.Header.Set(echo.HeaderContentType, w.FormDataContentType())
+	err := bindUpload(echo.New().NewContext(req, httptest.NewRecorder()), &registry.VersionOptions{})
+	var httpErr *errshttp.Error
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusRequestEntityTooLarge, httpErr.StatusCode())
+
 	// The route accepts large multipart bodies: it fails on auth, not on
 	// Content-Type or body size
-	req := newRequest()
+	req = newRequest()
 	req.RequestURI = ""
 	res, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
