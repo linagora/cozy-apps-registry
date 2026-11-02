@@ -681,7 +681,8 @@ func downloadTarball(opts *VersionOptions, url string) (*Tarball, error) {
 		buf, contentType, err = downloadRequest(opts, url)
 		if err == nil {
 			break
-		} else if tryCount <= 3 {
+		} else if opts.Tarball == nil && tryCount <= 3 {
+			// An uploaded tarball fails the same way every time
 			continue
 		} else {
 			return nil, err
