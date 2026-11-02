@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,8 +126,13 @@ func isMultipart(c echo.Context) bool {
 // holds the archive itself.
 func bindUpload(c echo.Context, opts *registry.VersionOptions) error {
 	req := c.Request()
-	req.Body = http.MaxBytesReader(c.Response(), req.Body, registry.MaxApplicationSize+1<<20)
+	req.Body = http.MaxBytesReader(c.Response().Writer, req.Body, registry.MaxApplicationSize+(1<<20))
 	if err := req.ParseMultipartForm(32 << 20); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return errshttp.NewError(http.StatusRequestEntityTooLarge,
+				"Uploaded tarball is bigger than %dMB", registry.MaxApplicationSize>>20)
+		}
 		return errshttp.NewError(http.StatusBadRequest, "Invalid multipart body: %s", err)
 	}
 	metadata := req.FormValue("metadata")
