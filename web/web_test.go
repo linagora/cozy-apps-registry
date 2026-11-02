@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -354,6 +355,29 @@ func TestCreateVersionUpload(t *testing.T) {
 	require.NoError(t, err)
 	defer res2.Body.Close()
 	assert.Equal(t, http.StatusRequestEntityTooLarge, res2.StatusCode)
+}
+
+func TestCreateVersionUploadChecksPermissionsFirst(t *testing.T) {
+	// A token of another editor passes the authentication check but not the
+	// permission check: the request is rejected on permissions, before the
+	// body is read
+	base.SessionSecret = auth.GenerateMasterSecret()
+	t.Cleanup(func() { base.SessionSecret = nil })
+	stranger, err := auth.Editors.CreateEditorWithoutPublicKey("stranger", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = auth.Editors.DeleteEditor(stranger) })
+	token, err := stranger.GenerateEditorToken(base.SessionSecret, 0, keptApp)
+	require.NoError(t, err)
+
+	target := fmt.Sprintf("%s/%s/registry/%s", server.URL, allAppsSpace, keptApp)
+	req, err := http.NewRequest(http.MethodPost, target, strings.NewReader("not a multipart body"))
+	require.NoError(t, err)
+	req.Header.Set(echo.HeaderContentType, echo.MIMEMultipartForm+"; boundary=x")
+	req.Header.Set(echo.HeaderAuthorization, authTokenScheme+base64.StdEncoding.EncodeToString(token))
+	res, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer res.Body.Close()
+	assert.Equal(t, http.StatusUnauthorized, res.StatusCode)
 }
 
 func TestCheckRedirectIsTrusted(t *testing.T) {
