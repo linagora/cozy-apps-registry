@@ -324,7 +324,7 @@ func newUploadRequest(t *testing.T, target, metadata string, tarball []byte) *ht
 
 func TestCreateVersionUpload(t *testing.T) {
 	target := server.URL + "/registry/" + keptApp
-	metadata := `{"version":"1.0.0","sha256":"abc"}`
+	metadata := `{"version":"1.0.0","sha256":"abc","url":"file:///etc/passwd"}`
 	// Larger than the 100K body limit applied to the other requests
 	content := bytes.Repeat([]byte("x"), 200<<10)
 
@@ -333,6 +333,7 @@ func TestCreateVersionUpload(t *testing.T) {
 	require.NoError(t, bindUpload(c, opts))
 	assert.Equal(t, "1.0.0", opts.Version)
 	assert.Equal(t, content, opts.Tarball)
+	// Neither the url from the metadata nor the uploaded file name are used
 	assert.Equal(t, "tarball.tar.gz", opts.URL)
 
 	// The metadata comes from the body, not from the query string
