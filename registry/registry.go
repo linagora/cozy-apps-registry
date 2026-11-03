@@ -228,7 +228,9 @@ func IsValidVersion(ver *VersionOptions) error {
 	}
 	if ver.URL == "" {
 		fields = append(fields, "url")
-	} else if _, err := url.Parse(ver.URL); err != nil {
+	} else if u, err := url.Parse(ver.URL); err != nil || u.Scheme == "file" {
+		// downloadRequest reads a file URL from the disk of the server, which
+		// only the tests calling DownloadVersion directly should reach.
 		fields = append(fields, "url")
 	}
 	if h, err := hex.DecodeString(ver.Sha256); err != nil || len(h) != 32 {
