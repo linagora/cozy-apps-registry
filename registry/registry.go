@@ -34,7 +34,16 @@ import (
 
 const (
 	maxApplicationSizeInMB = 20
-	maxApplicationSize     = maxApplicationSizeInMB * 1024 * 1024 // 20 Mo
+	// The compressed tarball, whatever its source
+	maxApplicationSize = maxApplicationSizeInMB * 1024 * 1024 // 20 Mo
+	// The icons and the screenshots, kept in memory together. The screenshots
+	// are bitmaps that gzip barely shrinks, and an SVG icon weighs a few KB,
+	// so 20MB is well above any legitimate case.
+	maxAssetsSize = maxApplicationSize
+	// manifest.webapp or manifest.konnector
+	maxManifestSize = maxApplicationSize
+	// package.json
+	maxPackageJSONSize = maxApplicationSize
 )
 
 var (
@@ -856,7 +865,7 @@ func HandleAssets(tarball *Tarball, opts *VersionOptions) ([]*kivik.Attachment, 
 	}
 
 	// The assets are kept in memory, so they share a single budget
-	budget := &io.LimitedReader{R: tr, N: maxApplicationSize + 1}
+	assets := newSizeBudget(tr, maxAssetsSize, "the icons and screenshots")
 	for {
 		var hdr *tar.Header
 		hdr, err = tr.Next()
@@ -891,7 +900,7 @@ func HandleAssets(tarball *Tarball, opts *VersionOptions) ([]*kivik.Attachment, 
 			continue
 		}
 		var data []byte
-		data, err = readLimited(budget)
+		data, err = assets.readEntry()
 		if err != nil {
 			return nil, err
 		}
@@ -909,13 +918,31 @@ func HandleAssets(tarball *Tarball, opts *VersionOptions) ([]*kivik.Attachment, 
 	return attachments, nil
 }
 
-// readLimited reads r until EOF and fails once its limit is exhausted: tar
-// entries are decompressed, so their size is not bounded by the tarball size.
-func readLimited(r *io.LimitedReader) ([]byte, error) {
-	data, err := io.ReadAll(r)
-	if err == nil && r.N <= 0 {
+// sizeBudget bounds what is read from the entries of a tar archive: they are
+// decompressed, so their size is not bounded by the tarball size.
+type sizeBudget struct {
+	reader *io.LimitedReader
+	limit  int64
+	name   string
+}
+
+// newSizeBudget allows to read up to limit bytes from the entries of r, name
+// telling what is read in the error message.
+func newSizeBudget(r io.Reader, limit int64, name string) *sizeBudget {
+	return &sizeBudget{
+		reader: &io.LimitedReader{R: r, N: limit + 1},
+		limit:  limit,
+		name:   name,
+	}
+}
+
+// readEntry reads the current tar entry until its end and fails once the
+// budget is exhausted.
+func (b *sizeBudget) readEntry() ([]byte, error) {
+	data, err := io.ReadAll(b.reader)
+	if err == nil && b.reader.N <= 0 {
 		err = errshttp.NewError(http.StatusUnprocessableEntity,
-			"Application tarball content is bigger than %dMB", maxApplicationSizeInMB)
+			"The size of %s is over %dMB", b.name, b.limit>>20)
 	}
 	return data, err
 }
@@ -1004,7 +1031,7 @@ func ReadTarballVersion(reader io.Reader, contentType, url string) (*Tarball, er
 
 		if basename == "package.json" {
 			var packageContent []byte
-			packageContent, err = readLimited(&io.LimitedReader{R: tr, N: maxApplicationSize + 1})
+			packageContent, err = newSizeBudget(tr, maxPackageJSONSize, "package.json").readEntry()
 			if err != nil {
 				err = errshttp.NewError(http.StatusUnprocessableEntity,
 					"Could not reach version on specified url %s: %s", url, err)
@@ -1042,7 +1069,7 @@ func ReadTarballVersion(reader io.Reader, contentType, url string) (*Tarball, er
 // ReadTarballManifest handles the tarball manifest. It checks if the manifest
 // exists, is valid JSON and tries to load it to the Manifest struct
 func ReadTarballManifest(tr io.Reader, url string) (*Manifest, []byte, map[string]interface{}, error) {
-	manifestContent, err := readLimited(&io.LimitedReader{R: tr, N: maxApplicationSize + 1})
+	manifestContent, err := newSizeBudget(tr, maxManifestSize, "the manifest").readEntry()
 	if err != nil {
 		err = errshttp.NewError(http.StatusUnprocessableEntity,
 			"Could not reach version on specified url %s: %s", url, err)
