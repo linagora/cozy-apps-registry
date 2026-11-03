@@ -93,6 +93,7 @@ func TestDownloadVersion(t *testing.T) {
 		Version:     "1.0.0",
 		RegistryURL: buildedURL,
 		SpacePrefix: base.Prefix(testSpaceName),
+		AppSlug:     manifest.Slug,
 	}
 
 	ver, att, err := DownloadVersion(opts)
