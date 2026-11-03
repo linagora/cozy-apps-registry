@@ -40,10 +40,10 @@ const (
 	// are bitmaps that gzip barely shrinks, and an SVG icon weighs a few KB,
 	// so 20MB is well above any legitimate case.
 	maxAssetsSize = maxApplicationSize
-	// manifest.webapp or manifest.konnector
-	maxManifestSize = maxApplicationSize
-	// package.json
-	maxPackageJSONSize = maxApplicationSize
+	// manifest.webapp or manifest.konnector, a few KB in practice
+	maxManifestSize = 1 << 20
+	// package.json, a few KB in practice
+	maxPackageJSONSize = 1 << 20
 )
 
 var (
