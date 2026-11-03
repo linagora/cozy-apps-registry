@@ -143,6 +143,9 @@ type VersionOptions struct {
 	Screenshots []string        `json:"screenshots"`
 	SpacePrefix base.Prefix
 	RegistryURL *url.URL
+	// AppSlug is the application the version is published to, that the slug of
+	// the manifest must match
+	AppSlug string `json:"-"`
 }
 
 type Version struct {
@@ -641,12 +644,18 @@ func (t *Tarball) CheckEditor() (bool, error) {
 	return true, nil
 }
 
-// CheckEditor validates a tarball manifest slug
-func (t *Tarball) CheckSlug() (bool, error) {
+// CheckSlug validates a tarball manifest slug
+func (t *Tarball) CheckSlug(expectedSlug string) (bool, error) {
 	slug := t.Manifest.Slug
 
 	if slug == "" {
 		return false, errors.New(`The "slug" field is empty`)
+	}
+	if !validSlugReg.MatchString(slug) {
+		return false, ErrAppSlugInvalid
+	}
+	if slug != expectedSlug {
+		return false, ErrVersionSlugMismatch
 	}
 
 	return true, nil
@@ -706,9 +715,6 @@ func downloadVersion(opts *VersionOptions) (*Version, []*kivik.Attachment, error
 	if _, erre := tarball.CheckEditor(); erre != nil {
 		err = multierror.Append(err, erre)
 	}
-	if _, errs := tarball.CheckSlug(); errs != nil {
-		err = multierror.Append(err, errs)
-	}
 	if _, errv := tarball.CheckVersion(opts.Version); errv != nil {
 		err = multierror.Append(err, errv)
 	}
@@ -722,6 +728,12 @@ func downloadVersion(opts *VersionOptions) (*Version, []*kivik.Attachment, error
 	// If there was any error during checks, we are not going further
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// The tarball is saved under its slug. This check stays out of the
+	// multierror above, which would lose its HTTP status.
+	if _, errs := tarball.CheckSlug(opts.AppSlug); errs != nil {
+		return nil, nil, errs
 	}
 
 	manifestContent := tarball.ManifestContent

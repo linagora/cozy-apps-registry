@@ -62,6 +62,7 @@ func createVersion(c echo.Context) (err error) {
 	}
 
 	opts.RegistryURL = buildedURL
+	opts.AppSlug = app.Slug
 
 	ver, attachments, err := registry.DownloadVersion(opts)
 	if err != nil {
