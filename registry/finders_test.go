@@ -10,6 +10,7 @@ import (
 
 	"github.com/cozy/cozy-apps-registry/base"
 	"github.com/cozy/cozy-apps-registry/space"
+	"github.com/go-kivik/kivik/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,6 +22,13 @@ const legacyContent = "the content of an asset stored in the app container"
 // the global asset store.
 func createLegacyVersion(t *testing.T, s *space.Space, slug, version, filename string) *Version {
 	t.Helper()
+	return createLegacyVersionIn(t, s, s.VersDB(), slug, version, filename)
+}
+
+// createLegacyVersionIn is createLegacyVersion for the database of versions
+// given, the published or the pending ones.
+func createLegacyVersionIn(t *testing.T, s *space.Space, db *kivik.DB, slug, version, filename string) *Version {
+	t.Helper()
 	ver := &Version{
 		ID:        getVersionID(slug, version),
 		Slug:      slug,
@@ -30,13 +38,19 @@ func createLegacyVersion(t *testing.T, s *space.Space, slug, version, filename s
 		CreatedAt: time.Now(),
 		URL:       "https://registry.example.org/registry/" + slug + "/" + version + "/tarball/" + filename,
 	}
-	rev, err := s.VersDB().Put(context.Background(), ver.ID, ver)
+	rev, err := db.Put(context.Background(), ver.ID, ver)
 	require.NoError(t, err)
 	ver.Rev = rev
 
 	fp := slug + "/" + version + "/" + filename
 	require.NoError(t, base.Storage.Create(s.GetPrefix(), fp, "application/gzip", bytes.NewReader([]byte(legacyContent))))
 	return ver
+}
+
+func assertObjectExists(t *testing.T, s *space.Space, fp string) {
+	t.Helper()
+	_, _, err := base.Storage.Get(s.GetPrefix(), fp)
+	assert.NoError(t, err)
 }
 
 func TestFindVersionAttachmentStaysInTheVersionFolder(t *testing.T) {
@@ -130,4 +144,35 @@ func TestFindVersionAttachmentNotFound(t *testing.T) {
 	unpublished.Version = "2.0.0"
 	_, err = FindVersionAttachment(s, &unpublished, "app.tar.gz")
 	assert.ErrorIs(t, err, base.ErrFileNotFound)
+}
+
+func TestMoveAssetToGlobalDatabaseDoesNotPublishAPendingVersion(t *testing.T) {
+	s, _ := space.GetSpace(testSpaceName)
+	const slug = "move-asset-pending"
+	const filename = "app.tar.gz"
+
+	// CouchDB only refuses a revision unknown to the database when the shard of
+	// the document is empty, which never happens outside of the tests.
+	for _, version := range []string{"0.0.1", "0.0.2", "0.0.3", "0.0.4", "0.0.5", "0.0.6", "0.0.7", "0.0.8"} {
+		createLegacyVersion(t, s, "move-asset-seed", version, filename)
+	}
+
+	ver := createLegacyVersionIn(t, s, s.PendingVersDB(), slug, "1.0.0", filename)
+	fp := slug + "/1.0.0/" + filename
+
+	require.NoError(t, MoveAssetToGlobalDatabase(s, ver, []byte(legacyContent), filename, "application/gzip"))
+
+	assertObjectExists(t, s, fp)
+	_, err := FindPublishedVersion(s, slug, "1.0.0")
+	assert.ErrorIs(t, err, ErrVersionNotFound)
+
+	pending, err := FindPendingVersion(s, slug, "1.0.0")
+	require.NoError(t, err)
+	assert.Empty(t, pending.AttachmentReferences)
+
+	_, err = ApprovePendingVersion(s, pending, &App{Slug: slug})
+	require.NoError(t, err)
+	_, err = FindPublishedVersion(s, slug, "1.0.0")
+	assert.NoError(t, err)
+	assertObjectExists(t, s, fp)
 }

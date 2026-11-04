@@ -216,7 +216,20 @@ func findMovedAsset(c *space.Space, version *Version, filename string) (string, 
 // 1. Creating the new asset object in the global database
 // 2. Adds a reference to the asset in the couch version document
 // 3. Removes the old asset location
+//
+// It does nothing for a version that is not published: a pending version must
+// stay out of the database of the published versions until its approval.
 func MoveAssetToGlobalDatabase(c *space.Space, ver *Version, content []byte, filename, contentType string) error {
+	// A version approved after it was read has another revision in the database
+	// of the published versions, so the Put below fails on a conflict and the
+	// old object is kept.
+	if _, err := FindPublishedVersion(c, ver.Slug, ver.Version); err != nil {
+		if err == ErrVersionNotFound {
+			return nil
+		}
+		return err
+	}
+
 	globalFilepath := filepath.Join(c.Name, ver.Slug, ver.Version)
 
 	a := &base.Asset{
