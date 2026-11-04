@@ -70,3 +70,64 @@ func TestFindVersionAttachmentStaysInTheVersionFolder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, legacyContent, string(content))
 }
+
+// The latest versions cache is not updated by a move, and it may be held by
+// another instance of the registry: the readers can get a version document
+// older than the move, which does not reference the asset yet.
+func TestReadersOfAVersionOlderThanTheMove(t *testing.T) {
+	s, _ := space.GetSpace(testSpaceName)
+	const slug = "move-asset-stale"
+	const filename = "app.tar.gz"
+	ver := createLegacyVersion(t, s, slug, "1.0.0", filename)
+
+	cached, err := json.Marshal(ver)
+	require.NoError(t, err)
+	key := base.NewKey(s.Name, slug, ChannelToStr(Stable))
+	base.LatestVersionsCache.Add(key, cached)
+	t.Cleanup(func() { base.LatestVersionsCache.Remove(key) })
+
+	stale := *ver
+	require.NoError(t, MoveAssetToGlobalDatabase(s, ver, []byte(legacyContent), filename, "application/gzip"))
+	require.NoError(t, base.Storage.Remove(s.GetPrefix(), slug+"/1.0.0/"+filename))
+
+	assertContent := func(t *testing.T, r io.Reader) {
+		t.Helper()
+		content, err := io.ReadAll(r)
+		require.NoError(t, err)
+		assert.Equal(t, legacyContent, string(content))
+	}
+
+	t.Run("FindVersionAttachment", func(t *testing.T) {
+		att, err := FindVersionAttachment(s, &stale, filename)
+		require.NoError(t, err)
+		assertContent(t, att.Content)
+	})
+
+	t.Run("FindAppAttachment", func(t *testing.T) {
+		att, err := FindAppAttachment(s, slug, filename, Stable)
+		require.NoError(t, err)
+		assertContent(t, att.Content)
+	})
+
+	t.Run("getOriginalTarball", func(t *testing.T) {
+		latest, err := FindLatestVersion(s, slug, Stable)
+		require.NoError(t, err)
+		require.Empty(t, latest.AttachmentReferences, "the version should come from the cache")
+		tarball, err := getOriginalTarball(s, latest)
+		require.NoError(t, err)
+		assertContent(t, tarball)
+	})
+}
+
+func TestFindVersionAttachmentNotFound(t *testing.T) {
+	s, _ := space.GetSpace(testSpaceName)
+	ver := createLegacyVersion(t, s, "move-asset-missing", "1.0.0", "app.tar.gz")
+
+	_, err := FindVersionAttachment(s, ver, "does-not-exist")
+	assert.ErrorIs(t, err, base.ErrFileNotFound)
+
+	unpublished := *ver
+	unpublished.Version = "2.0.0"
+	_, err = FindVersionAttachment(s, &unpublished, "app.tar.gz")
+	assert.ErrorIs(t, err, base.ErrFileNotFound)
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -131,6 +132,7 @@ func FindVersionAttachment(c *space.Space, version *Version, filename string) (*
 	// Checks if the asset from the global database is referenced in the Version
 	// document
 	shasum, ok := version.AttachmentReferences[filename]
+	moved := false
 
 	var err error
 	if ok {
@@ -140,7 +142,21 @@ func FindVersionAttachment(c *space.Space, version *Version, filename string) (*
 	} else {
 		// If we cannot find it, we try from the app container as a fallback
 		prefix := c.GetPrefix()
-		if contentBuffer, headers, err = base.Storage.Get(prefix, fp); err != nil {
+		contentBuffer, headers, err = base.Storage.Get(prefix, fp)
+		if errors.Is(err, base.ErrFileNotFound) {
+			// The given version may be older than the move of the asset, as the
+			// latest versions cache is not updated by MoveAssetToGlobalDatabase
+			// and may be held by another instance of the registry.
+			movedShasum, found, findErr := findMovedAsset(c, version, filename)
+			if findErr != nil {
+				return nil, findErr
+			}
+			if found {
+				moved = true
+				contentBuffer, headers, err = base.GlobalAssetStore.Get(movedShasum)
+			}
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -151,7 +167,7 @@ func FindVersionAttachment(c *space.Space, version *Version, filename string) (*
 	// If the asset was not found in the global database, move it for the next
 	// time (except when the ID is missing on the version, which is the case
 	// when the version was loaded via FindLatestVersion).
-	if !ok && version.ID != "" {
+	if !ok && !moved && version.ID != "" {
 		go func() {
 			err := MoveAssetToGlobalDatabase(c, version, fileContent, filename, contentType)
 			if err != nil {
@@ -177,6 +193,20 @@ func FindVersionAttachment(c *space.Space, version *Version, filename string) (*
 		ContentLength: headers["Content-Length"],
 	}
 	return att, nil
+}
+
+// findMovedAsset returns the shasum of an asset in the global database, by
+// looking at the current document of the version instead of the given one.
+func findMovedAsset(c *space.Space, version *Version, filename string) (string, bool, error) {
+	current, err := FindVersion(c, version.Slug, version.Version)
+	if err == ErrVersionNotFound {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	shasum, ok := current.AttachmentReferences[filename]
+	return shasum, ok, nil
 }
 
 // MoveAssetToGlobalDatabase moves an asset located in the "local" container in
