@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cozy/cozy-apps-registry/asset"
 	"github.com/cozy/cozy-apps-registry/base"
 	"github.com/cozy/cozy-apps-registry/space"
 	"github.com/go-kivik/kivik/v3"
@@ -51,6 +52,12 @@ func assertObjectExists(t *testing.T, s *space.Space, fp string) {
 	t.Helper()
 	_, _, err := base.Storage.Get(s.GetPrefix(), fp)
 	assert.NoError(t, err)
+}
+
+func assertObjectRemoved(t *testing.T, s *space.Space, fp string) {
+	t.Helper()
+	_, _, err := base.Storage.Get(s.GetPrefix(), fp)
+	assert.ErrorIs(t, err, base.ErrFileNotFound)
 }
 
 func TestFindVersionAttachmentStaysInTheVersionFolder(t *testing.T) {
@@ -102,7 +109,7 @@ func TestReadersOfAVersionOlderThanTheMove(t *testing.T) {
 
 	stale := *ver
 	require.NoError(t, MoveAssetToGlobalDatabase(s, ver, []byte(legacyContent), filename, "application/gzip"))
-	require.NoError(t, base.Storage.Remove(s.GetPrefix(), slug+"/1.0.0/"+filename))
+	assertObjectRemoved(t, s, slug+"/1.0.0/"+filename)
 
 	assertContent := func(t *testing.T, r io.Reader) {
 		t.Helper()
@@ -175,4 +182,59 @@ func TestMoveAssetToGlobalDatabaseDoesNotPublishAPendingVersion(t *testing.T) {
 	_, err = FindPublishedVersion(s, slug, "1.0.0")
 	assert.NoError(t, err)
 	assertObjectExists(t, s, fp)
+}
+
+func TestMoveAssetToGlobalDatabaseRemovesTheOldObject(t *testing.T) {
+	s, _ := space.GetSpace(testSpaceName)
+	const slug = "move-asset-removed"
+	const filename = "app.tar.gz"
+	ver := createLegacyVersion(t, s, slug, "1.0.0", filename)
+
+	// An unrelated object with the name of the asset, at the container root.
+	prefix := s.GetPrefix()
+	require.NoError(t, base.Storage.Create(prefix, filename, "text/plain", bytes.NewReader([]byte("unrelated"))))
+	t.Cleanup(func() { _ = base.Storage.Remove(prefix, filename) })
+
+	require.NoError(t, MoveAssetToGlobalDatabase(s, ver, []byte(legacyContent), filename, "application/gzip"))
+
+	assertObjectRemoved(t, s, slug+"/1.0.0/"+filename)
+	assertObjectExists(t, s, filename)
+
+	saved, err := FindVersion(s, slug, "1.0.0")
+	require.NoError(t, err)
+	assert.NotEmpty(t, saved.AttachmentReferences[filename])
+
+	att, err := FindVersionAttachment(s, saved, filename)
+	require.NoError(t, err)
+	content, err := io.ReadAll(att.Content)
+	require.NoError(t, err)
+	assert.Equal(t, legacyContent, string(content))
+}
+
+// The global store does not upload an asset whose document already exists, so
+// a document left without its object must not lead to the loss of the old one.
+func TestMoveAssetToGlobalDatabaseKeepsTheOldObjectWithoutTheMovedOne(t *testing.T) {
+	s, _ := space.GetSpace(testSpaceName)
+	const slug = "move-asset-lost"
+	const filename = "app.tar.gz"
+	ver := createLegacyVersion(t, s, slug, "1.0.0", filename)
+
+	content := []byte("an asset whose object is missing from the global store")
+	lost := &base.Asset{Name: filename, AppSlug: "move-asset-other", ContentType: "application/gzip"}
+	require.NoError(t, base.GlobalAssetStore.Add(lost, bytes.NewReader(content), "move-asset-other/1.0.0"))
+	require.NoError(t, base.Storage.Remove(asset.AssetContainerName, lost.Shasum))
+	t.Cleanup(func() {
+		db := base.GlobalAssetStore.GetDB()
+		var doc base.Asset
+		if err := db.Get(context.Background(), lost.Shasum).ScanDoc(&doc); err == nil {
+			_, _ = db.Delete(context.Background(), doc.ID, doc.Rev)
+		}
+	})
+
+	require.Error(t, MoveAssetToGlobalDatabase(s, ver, content, filename, "application/gzip"))
+
+	assertObjectExists(t, s, slug+"/1.0.0/"+filename)
+	saved, err := FindVersion(s, slug, "1.0.0")
+	require.NoError(t, err)
+	assert.Empty(t, saved.AttachmentReferences)
 }

@@ -243,6 +243,17 @@ func MoveAssetToGlobalDatabase(c *space.Space, ver *Version, content []byte, fil
 		return err
 	}
 
+	// Add does not upload an asset whose document already exists, even when
+	// its object is missing from the storage. The version must only reference
+	// the moved asset, and the old object be removed, once it can be read back.
+	movedContent, _, err := base.GlobalAssetStore.Get(a.Shasum)
+	if err != nil {
+		return fmt.Errorf("cannot read the moved asset %s back: %w", a.Shasum, err)
+	}
+	if !bytes.Equal(movedContent.Bytes(), content) {
+		return fmt.Errorf("the moved asset %s differs from its content", a.Shasum)
+	}
+
 	// Updating the couch document
 	if ver.AttachmentReferences == nil {
 		ver.AttachmentReferences = make(map[string]string)
@@ -257,7 +268,7 @@ func MoveAssetToGlobalDatabase(c *space.Space, ver *Version, content []byte, fil
 
 	// Remove the old object
 	prefix := c.GetPrefix()
-	return base.Storage.Remove(prefix, filename)
+	return base.Storage.Remove(prefix, filepath.Join(ver.Slug, ver.Version, filename))
 }
 
 func findVersion(appSlug, version string, dbs ...*kivik.DB) (*Version, error) {
