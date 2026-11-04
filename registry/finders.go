@@ -117,6 +117,12 @@ func FindVersionAttachment(c *space.Space, version *Version, filename string) (*
 	var shasum, contentType string
 	var fileContent []byte
 
+	// The name of a screenshot comes from the request path, and it must lead to
+	// an object inside the folder of this version, not to the folder itself.
+	if !filepath.IsLocal(filename) || filepath.Clean(filename) == "." {
+		return nil, base.NewFileNotFoundError(fmt.Errorf("invalid attachment name %q", filename))
+	}
+
 	var contentBuffer *bytes.Buffer
 	slug := version.Slug
 	ver := version.Version
