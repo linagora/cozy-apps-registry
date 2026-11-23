@@ -35,6 +35,10 @@ func TestAttachmentRoutesStayInTheVersionFolder(t *testing.T) {
 	// So that the folder of the version exists.
 	screenshot := overwrittenApp + "/1.2.3/screenshots/one.png"
 	require.NoError(t, base.Storage.Create(prefix, screenshot, "image/png", strings.NewReader(screenshot)))
+	// A screenshot route must not serve the tarball, which a virtual space
+	// overwrites on the tarball route only.
+	tarball := overwrittenApp + "/1.2.3/app.tar.gz"
+	require.NoError(t, base.Storage.Create(prefix, tarball, "application/gzip", strings.NewReader(tarball)))
 
 	// From <slug>/<version>/screenshots, three levels up is the container.
 	const traversal = "../../../" + secret
@@ -45,11 +49,15 @@ func TestAttachmentRoutesStayInTheVersionFolder(t *testing.T) {
 		app + "/stable/latest/screenshots/" + traversal,
 		app + "/1.2.3/screenshots/" + traversal,
 		app + "/1.2.3/screenshots/..",
+		app + "/screenshots/../app.tar.gz",
+		app + "/1.2.3/screenshots/../app.tar.gz",
 		app + "/1.2.3/tarball/.",
 		app + "/1.2.3/tarball/..",
 		virtualApp + "/screenshots/" + traversal,
 		virtualApp + "/stable/latest/screenshots/" + traversal,
 		virtualApp + "/1.2.3/screenshots/" + traversal,
+		virtualApp + "/screenshots/../app.tar.gz",
+		virtualApp + "/1.2.3/screenshots/../app.tar.gz",
 	} {
 		res, err := http.Get(server.URL + path)
 		require.NoError(t, err)
@@ -58,5 +66,6 @@ func TestAttachmentRoutesStayInTheVersionFolder(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusNotFound, res.StatusCode, path)
 		assert.NotContains(t, string(body), secret, path)
+		assert.NotContains(t, string(body), tarball, path)
 	}
 }
